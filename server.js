@@ -275,7 +275,7 @@ app.get('/api/weatherforecast', async (req, res) => {
 
 app.get('/api/waves', async (req, res) => {
   try {
-    const url = 'https://marine-api.open-meteo.com/v1/marine?latitude=56.06&longitude=-2.7&daily=wave_height_max&timezone=Europe%2FLondon';
+    const url = 'https://marine-api.open-meteo.com/v1/marine?latitude=56.06&longitude=-2.7&daily=wave_height_max,wave_direction_dominant&timezone=Europe%2FLondon';
     const cacheKey = 'waves';
     const cacheTtlMs = 10 * 60 * 1000;
     const cached = getCachedValue(cacheKey);
