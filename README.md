@@ -2,6 +2,23 @@
 
 Express proxy server for weather, wave, tide, and live wind data.
 
+## Data sources by endpoint
+
+- `/api/weatherforecast`
+   - Source: Open-Meteo Forecast API (`https://api.open-meteo.com/v1/forecast`)
+   - Data returned: hourly wind speed/direction, precipitation probability, temperature, weather code, plus daily sunrise/sunset
+- `/api/waves`
+   - Source: Open-Meteo Marine API (`https://marine-api.open-meteo.com/v1/marine`)
+   - Data returned: daily maximum wave height and dominant wave direction
+- `/api/tides`
+   - Source: UK Admiralty Tidal API (`https://admiraltyapi.azure-api.net/uktidalapi/api/V1/...`)
+   - Data returned: tidal events for the selected station
+   - Auth: requires `ADMIRALTY_API_KEY`
+- `/api/livewind`
+   - Source: live wind station webpage configured in `LOCATION_PRESETS.northberwick.livewind.url`
+   - Retrieval method: page scrape via Puppeteer (not a JSON API)
+   - Data returned: latest wind speed/direction/time and min/mean/max values for 5/30/60-minute intervals
+
 ## Prerequisites
 
 - Node.js 18+ (includes npm)
