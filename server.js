@@ -1,4 +1,5 @@
 console.log("RUNNING SERVER FROM:", __filename);
+require('dotenv').config();
 const express = require('express');
 const puppeteer = require('puppeteer');
 
@@ -32,7 +33,7 @@ function setCachedValue(key, value, ttlMs) {
 const DEFAULT_LOCATION_KEY = 'northberwick';
 
 //To find list of locations, enter the following Curl command, e.g. into Git Bash 
-//curl -v -X GET "https://admiraltyapi.azure-api.net/uktidalapi/api/V1/Stations" -H "Cache-Control: no-cache" -H "Ocp-Apim-Subscription-Key: f13ed0b0b62e442cabbd0769c52533f7"
+//curl -v -X GET "https://admiraltyapi.azure-api.net/uktidalapi/api/V1/Stations" -H "Cache-Control: no-cache" -H "Ocp-Apim-Subscription-Key: $ADMIRALTY_API_KEY"
 
 const LOCATION_PRESETS = {
   burghead: {
@@ -301,7 +302,10 @@ app.get('/api/tides', async (req, res) => {
     return res.json(cached);
   }
   console.log(`[tides] Cache miss for station ${station}; fetching from API`);
-  const admiraltyKey = process.env.ADMIRALTY_API_KEY || 'f13ed0b0b62e442cabbd0769c52533f7';
+  const admiraltyKey = process.env.ADMIRALTY_API_KEY;
+  if (!admiraltyKey) {
+    return res.status(500).json({ error: 'Server misconfiguration', details: 'ADMIRALTY_API_KEY is not set' });
+  }
   const url = `https://admiraltyapi.azure-api.net/uktidalapi/api/V1/Stations/${encodeURIComponent(station)}/TidalEvents`;
 
   // node-fetch v3 is ESM only, so dynamically import it in CommonJS

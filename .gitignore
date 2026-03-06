@@ -1,2 +1,5 @@
 node_modules
 chrome
+.env
+.env.*
+!.env.example
