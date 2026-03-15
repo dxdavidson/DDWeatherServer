@@ -161,7 +161,7 @@ function meetsDecreaseThreshold(shorterIntervalMean, longerIntervalMean) {
 }
 
 // Override to Dropping if 5-minute mean is at least 15% below 60-minute mean,
-// or to Strengthening if 5-minute mean is greater than 15% of 60-minute mean.
+// or to Strengthening if 5-minute mean is at least 15% above 60-minute mean.
 // Otherwise use 5% step changes between 60->30 and 30->5 to classify trends.
 function determineWindTrend(meanMaxByInterval) {
   const meansByInterval = new Map(
@@ -183,7 +183,7 @@ function determineWindTrend(meanMaxByInterval) {
     return 'Dropping';
   }
 
-  if (mean5 > mean60 * 0.15) {
+  if (mean5 >= mean60 * 1.15) {
     return 'Strengthening';
   }
 
