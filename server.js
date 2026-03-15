@@ -160,8 +160,9 @@ function meetsDecreaseThreshold(shorterIntervalMean, longerIntervalMean) {
   return shorterIntervalMean <= longerIntervalMean * (1 - TREND_THRESHOLD_RATIO);
 }
 
-// Compare the 60, 30, and 5 minute mean wind speeds and only mark a trend as directional
-// when each shorter window changes by at least 5%; otherwise treat the wind as steady.
+// Override to Dropping if 5-minute mean is at least 15% below 60-minute mean,
+// or to Strengthening if 5-minute mean is greater than 15% of 60-minute mean.
+// Otherwise use 5% step changes between 60->30 and 30->5 to classify trends.
 function determineWindTrend(meanMaxByInterval) {
   const meansByInterval = new Map(
     (Array.isArray(meanMaxByInterval) ? meanMaxByInterval : []).map((entry) => [
@@ -176,6 +177,14 @@ function determineWindTrend(meanMaxByInterval) {
 
   if (mean5 === null || mean30 === null || mean60 === null) {
     return 'Stable';
+  }
+
+  if (mean5 <= mean60 * 0.85) {
+    return 'Dropping';
+  }
+
+  if (mean5 > mean60 * 0.15) {
+    return 'Strengthening';
   }
 
   if (meetsIncreaseThreshold(mean5, mean30) && meetsIncreaseThreshold(mean30, mean60)) {
