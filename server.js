@@ -10,6 +10,7 @@ const cors = require('cors');
 app.use(cors());
 
 const cacheStore = new Map();
+const WEBCAM_CACHE_TTL_MS = 60 * 1000;
 
 function getCachedValue(key) {
   const entry = cacheStore.get(key);
@@ -40,13 +41,27 @@ const LOCATION_PRESETS = {
     forecast: { latitude: 57.70, longitude: -3.49 },
     marine: { latitude: 57.70, longitude: -3.49 },
     tides: { station: '0250' }, //Burghead
-    livewind: { url: 'http://88.97.23.70:82/' }
+    livewind: { url: 'http://88.97.23.70:82/' },
+    webcam: {
+      url: 'http://88.97.23.70/default.html',
+      images: [
+        { url: 'http://88.97.23.70/WebCam/craig_1.jpg', description: 'Start Line' },
+        { url: 'http://88.97.23.70/WebCam/west_1.jpg', description: 'West Bay View' }
+      ]
+    }
   },
   northberwick: {
     forecast: { latitude: 56.06, longitude: -2.72 },
     marine: { latitude: 56.06, longitude: -2.72 },
     tides: { station: '0223' }, // Station 0223 is Fidra
-    livewind: { url: 'http://88.97.23.70:82/' }
+    livewind: { url: 'http://88.97.23.70:82/' },
+    webcam: {
+      url: 'http://88.97.23.70/default.html',
+      images: [
+        { url: 'http://88.97.23.70/WebCam/craig_1.jpg', description: 'Webcam image 1' },
+        { url: 'http://88.97.23.70/WebCam/west_1.jpg', description: 'Webcam image 2' }
+      ]
+    }
   }
 };
 
@@ -117,6 +132,10 @@ function getLocationConfig(rawLocation) {
       },
       livewind: {
         url: defaultPreset.livewind.url
+      },
+      webcam: {
+        url: defaultPreset.webcam.url,
+        images: defaultPreset.webcam.images
       }
     };
   }
@@ -139,6 +158,77 @@ function convertKnotsToMph(value) {
 function parseNumericValue(value) {
   const numeric = Number.parseFloat(value);
   return Number.isFinite(numeric) ? numeric : null;
+}
+
+function parseWebcamTimestamp(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  const match = trimmed.match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+
+  const day = Number.parseInt(match[1], 10);
+  const monthIndex = Number.parseInt(match[2], 10) - 1;
+  const year = Number.parseInt(match[3], 10);
+  const hours = Number.parseInt(match[4], 10);
+  const minutes = Number.parseInt(match[5], 10);
+  const timestamp = new Date(year, monthIndex, day, hours, minutes, 0, 0);
+
+  return Number.isNaN(timestamp.getTime()) ? null : timestamp;
+}
+
+function getWebcamStatus(lastUpdated) {
+  const updatedAt = parseWebcamTimestamp(lastUpdated);
+  if (!updatedAt) {
+    return 'Inactive';
+  }
+
+  const ageMs = Math.abs(Date.now() - updatedAt.getTime());
+  return ageMs <= 5 * 60 * 1000 ? 'Active' : 'Inactive';
+}
+
+async function fetchWebcamData(webcamConfig) {
+  const webcamUrl = webcamConfig.url;
+  const cacheKey = `webcam:${webcamUrl}`;
+  const cached = getCachedValue(cacheKey);
+  if (cached) {
+    console.log('[webcam] Cache hit; serving cached response');
+    return cached;
+  }
+
+  console.log('[webcam] Cache miss; fetching webcam metadata');
+  const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+  const { JSDOM } = require('jsdom');
+
+  const response = await fetch(webcamUrl, {
+    headers: {
+      'Cache-Control': 'no-cache'
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Webcam page returned non-OK status ${response.status}`);
+  }
+
+  const html = await response.text();
+  const dom = new JSDOM(html, { runScripts: 'dangerously' });
+  const lastupdated = dom.window.document.querySelector('#datetime')?.textContent?.trim() || null;
+  const webcamData = {
+    status: getWebcamStatus(lastupdated),
+    lastupdated,
+    images: Array.isArray(webcamConfig.images) ? webcamConfig.images : []
+  };
+
+  if (lastupdated !== null) {
+    setCachedValue(cacheKey, webcamData, WEBCAM_CACHE_TTL_MS);
+    console.log(`[webcam] Caching response for ${Math.round(WEBCAM_CACHE_TTL_MS / 1000)} seconds`);
+  }
+
+  return webcamData;
 }
 
 // Require each shorter averaging window to differ by at least 5% before calling the trend directional.
@@ -346,6 +436,22 @@ app.get('/api/livewind', async (req, res) => {
         console.error('Error closing browser:', e);
       }
     }
+  }
+});
+
+app.get('/api/webcam', async (req, res) => {
+  try {
+    const locationConfig = getLocationConfig(req.query.location);
+    if (locationConfig.error) {
+      return res.status(400).json({ error: locationConfig.error, details: locationConfig.message, supportedLocations: locationConfig.supportedLocations });
+    }
+
+    const webcamData = await fetchWebcamData(locationConfig.webcam);
+    res.set('Cache-Control', `public, max-age=${Math.round(WEBCAM_CACHE_TTL_MS / 1000)}`);
+    return res.json(webcamData);
+  } catch (error) {
+    console.error('Error fetching webcam data:', error);
+    return res.status(500).json({ error: 'Failed to fetch webcam data', details: error.message });
   }
 });
 

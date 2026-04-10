@@ -18,6 +18,10 @@ Express proxy server for weather, wave, tide, and live wind data.
    - Source: live wind station webpage configured in `LOCATION_PRESETS.northberwick.livewind.url`
    - Retrieval method: page scrape via Puppeteer (not a JSON API)
    - Data returned: latest wind speed/direction/time, a `trend` value (`Strengthening`, `Dropping`, or `Steady`) based on 5% changes between the 60/30/5-minute mean values, and min/mean/max values for 5/30/60-minute intervals
+- `/api/webcam`
+   - Source: webcam page configured in `LOCATION_PRESETS.<location>.webcam.url`
+   - Retrieval method: page scrape via `node-fetch` and `jsdom`
+   - Data returned: `status` (`Active` when the scraped `lastupdated` value is within 5 minutes of current server time, otherwise `Inactive`), `lastupdated` from the page element with id `datetime`, plus an `images` collection of available webcam image URLs with placeholder descriptions
 
 ## Prerequisites
 
@@ -54,6 +58,7 @@ Open these in your browser or use curl:
 - `http://localhost:3000/api/waves`
 - `http://localhost:3000/api/tides`
 - `http://localhost:3000/api/livewind`
+- `http://localhost:3000/api/webcam`
 
 Optional location query examples:
 
