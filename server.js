@@ -58,8 +58,8 @@ const LOCATION_PRESETS = {
     webcam: {
       url: 'http://88.97.23.70/default.html',
       images: [
-        { url: 'http://88.97.23.70/WebCam/craig_1.jpg', description: 'Webcam image 1' },
-        { url: 'http://88.97.23.70/WebCam/west_1.jpg', description: 'Webcam image 2' }
+        { url: 'http://88.97.23.70/WebCam/craig_1.jpg', description: 'Start Line' },
+        { url: 'http://88.97.23.70/WebCam/west_1.jpg', description: 'West Bay View' }
       ]
     }
   }
