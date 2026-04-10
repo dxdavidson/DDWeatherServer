@@ -11,6 +11,20 @@ app.use(cors());
 
 const cacheStore = new Map();
 const WEBCAM_CACHE_TTL_MS = 60 * 1000;
+const WEBCAM_TIME_ZONE = 'Europe/London';
+const webcamTimestampFormatter = new Intl.DateTimeFormat('en-GB', {
+  timeZone: WEBCAM_TIME_ZONE,
+  day: '2-digit',
+  month: '2-digit',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23'
+});
+const webcamOffsetFormatter = new Intl.DateTimeFormat('en-GB', {
+  timeZone: WEBCAM_TIME_ZONE,
+  timeZoneName: 'shortOffset'
+});
 
 function getCachedValue(key) {
   const entry = cacheStore.get(key);
@@ -160,6 +174,58 @@ function parseNumericValue(value) {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
+function formatWebcamTimestamp(date) {
+  const parts = webcamTimestampFormatter.formatToParts(date);
+  const values = {};
+
+  for (const part of parts) {
+    if (part.type !== 'literal') {
+      values[part.type] = part.value;
+    }
+  }
+
+  return `${values.day}.${values.month}.${values.year} ${values.hour}:${values.minute}`;
+}
+
+function getWebcamOffsetMilliseconds(date) {
+  const offsetValue = webcamOffsetFormatter
+    .formatToParts(date)
+    .find((part) => part.type === 'timeZoneName')
+    ?.value;
+
+  if (!offsetValue) {
+    return 0;
+  }
+
+  const match = offsetValue.match(/^GMT(?:(\+|-)(\d{1,2})(?::?(\d{2}))?)?$/);
+  if (!match) {
+    return 0;
+  }
+
+  const sign = match[1] === '-' ? -1 : 1;
+  const hours = Number.parseInt(match[2] || '0', 10);
+  const minutes = Number.parseInt(match[3] || '0', 10);
+
+  return sign * ((hours * 60) + minutes) * 60 * 1000;
+}
+
+function createWebcamDate(year, monthIndex, day, hours, minutes) {
+  let timestampMs = Date.UTC(year, monthIndex, day, hours, minutes, 0, 0);
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const offsetMilliseconds = getWebcamOffsetMilliseconds(new Date(timestampMs));
+    const adjustedTimestampMs = Date.UTC(year, monthIndex, day, hours, minutes, 0, 0) - offsetMilliseconds;
+
+    if (adjustedTimestampMs === timestampMs) {
+      break;
+    }
+
+    timestampMs = adjustedTimestampMs;
+  }
+
+  return new Date(timestampMs);
+}
+
 function parseWebcamTimestamp(value) {
   if (typeof value !== 'string') {
     return null;
@@ -176,7 +242,7 @@ function parseWebcamTimestamp(value) {
   const year = Number.parseInt(match[3], 10);
   const hours = Number.parseInt(match[4], 10);
   const minutes = Number.parseInt(match[5], 10);
-  const timestamp = new Date(year, monthIndex, day, hours, minutes, 0, 0);
+  const timestamp = createWebcamDate(year, monthIndex, day, hours, minutes);
 
   return Number.isNaN(timestamp.getTime()) ? null : timestamp;
 }
@@ -215,8 +281,8 @@ async function fetchWebcamData(webcamConfig) {
   }
 
   const html = await response.text();
-  const dom = new JSDOM(html, { runScripts: 'dangerously' });
-  const lastupdated = dom.window.document.querySelector('#datetime')?.textContent?.trim() || null;
+  const dom = new JSDOM(html);
+  const lastupdated = dom.window.document.querySelector('#datetime')?.textContent?.trim() || formatWebcamTimestamp(new Date());
   const webcamData = {
     status: getWebcamStatus(lastupdated),
     lastupdated,

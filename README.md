@@ -21,7 +21,7 @@ Express proxy server for weather, wave, tide, and live wind data.
 - `/api/webcam`
    - Source: webcam page configured in `LOCATION_PRESETS.<location>.webcam.url`
    - Retrieval method: page scrape via `node-fetch` and `jsdom`
-   - Data returned: `status` (`Active` when the scraped `lastupdated` value is within 5 minutes of current server time, otherwise `Inactive`), `lastupdated` from the page element with id `datetime`, plus an `images` collection of available webcam image URLs with placeholder descriptions
+   - Data returned: `status` (`Active` when the scraped `lastupdated` value is within 5 minutes of current server time, otherwise `Inactive`), `lastupdated` normalized to `Europe/London` to avoid host timezone drift, plus an `images` collection of available webcam image URLs with placeholder descriptions
 
 ## Prerequisites
 
