@@ -5,12 +5,14 @@ const puppeteer = require('puppeteer');
 
 const app = express();
 const PORT = 3000;
+app.set('trust proxy', true);
 
 const cors = require('cors');
 app.use(cors());
 
 const cacheStore = new Map();
 const WEBCAM_CACHE_TTL_MS = 60 * 1000;
+const WEBCAM_IMAGE_CACHE_TTL_MS = 30 * 1000;
 const WEBCAM_TIME_ZONE = 'Europe/London';
 const webcamTimestampFormatter = new Intl.DateTimeFormat('en-GB', {
   timeZone: WEBCAM_TIME_ZONE,
@@ -257,6 +259,94 @@ function getWebcamStatus(lastUpdated) {
   return ageMs <= 5 * 60 * 1000 ? 'Active' : 'Inactive';
 }
 
+function getFetch() {
+  return (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+}
+
+function sanitizeCameraId(rawValue) {
+  return String(rawValue || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function getLocationFromRequest(req) {
+  const locationConfig = getLocationConfig(req.query.location);
+  if (locationConfig.error) {
+    return { error: locationConfig };
+  }
+  return { locationConfig };
+}
+
+function buildWebcamImageMap(webcamConfig) {
+  const images = Array.isArray(webcamConfig?.images) ? webcamConfig.images : [];
+  const map = new Map();
+
+  for (let index = 0; index < images.length; index += 1) {
+    const image = images[index] || {};
+    const imageUrl = typeof image.url === 'string' ? image.url.trim() : '';
+    if (!imageUrl) {
+      continue;
+    }
+
+    const idBase = sanitizeCameraId(image.description || `camera-${index + 1}`) || `camera-${index + 1}`;
+    const uniqueId = map.has(idBase) ? `${idBase}-${index + 1}` : idBase;
+
+    map.set(uniqueId, {
+      id: uniqueId,
+      url: imageUrl,
+      description: image.description || `Camera ${index + 1}`
+    });
+  }
+
+  return map;
+}
+
+function getPublicOrigin(req) {
+  const forwardedProtoHeader = req.get('x-forwarded-proto');
+  const forwardedHostHeader = req.get('x-forwarded-host');
+
+  const forwardedProto = typeof forwardedProtoHeader === 'string'
+    ? forwardedProtoHeader.split(',')[0].trim()
+    : '';
+  const forwardedHost = typeof forwardedHostHeader === 'string'
+    ? forwardedHostHeader.split(',')[0].trim()
+    : '';
+
+  if (forwardedProto && forwardedHost) {
+    return `${forwardedProto}://${forwardedHost}`;
+  }
+
+  const protocol = req.protocol || 'http';
+  const host = req.get('host') || '';
+  return `${protocol}://${host}`;
+}
+
+function getWebcamImageProxyPath(locationLabel, cameraId) {
+  const params = new URLSearchParams({ location: locationLabel, cam: cameraId });
+  return `/api/webcam/image?${params.toString()}`;
+}
+
+function mapWebcamImagesForClient(images, locationLabel, req) {
+  const mappedImages = [];
+  const imageMap = buildWebcamImageMap({ images });
+  const origin = getPublicOrigin(req);
+
+  for (const image of imageMap.values()) {
+    const path = getWebcamImageProxyPath(locationLabel, image.id);
+    const absoluteUrl = `${origin}${path}`;
+    mappedImages.push({
+      id: image.id,
+      description: image.description,
+      url: absoluteUrl,
+      absoluteUrl,
+      path
+    });
+  }
+
+  return mappedImages;
+}
+
 async function fetchWebcamData(webcamConfig) {
   const webcamUrl = webcamConfig.url;
   const cacheKey = `webcam:${webcamUrl}`;
@@ -267,7 +357,7 @@ async function fetchWebcamData(webcamConfig) {
   }
 
   console.log('[webcam] Cache miss; fetching webcam metadata');
-  const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+  const fetch = getFetch();
   const { JSDOM } = require('jsdom');
 
   const response = await fetch(webcamUrl, {
@@ -507,17 +597,80 @@ app.get('/api/livewind', async (req, res) => {
 
 app.get('/api/webcam', async (req, res) => {
   try {
-    const locationConfig = getLocationConfig(req.query.location);
-    if (locationConfig.error) {
-      return res.status(400).json({ error: locationConfig.error, details: locationConfig.message, supportedLocations: locationConfig.supportedLocations });
+    const locationResult = getLocationFromRequest(req);
+    if (locationResult.error) {
+      const details = locationResult.error;
+      return res.status(400).json({ error: details.error, details: details.message, supportedLocations: details.supportedLocations });
     }
 
+    const { locationConfig } = locationResult;
+
     const webcamData = await fetchWebcamData(locationConfig.webcam);
+    const responseData = {
+      ...webcamData,
+      images: mapWebcamImagesForClient(webcamData.images, locationConfig.label, req)
+    };
+
     res.set('Cache-Control', `public, max-age=${Math.round(WEBCAM_CACHE_TTL_MS / 1000)}`);
-    return res.json(webcamData);
+    return res.json(responseData);
   } catch (error) {
     console.error('Error fetching webcam data:', error);
     return res.status(500).json({ error: 'Failed to fetch webcam data', details: error.message });
+  }
+});
+
+app.get('/api/webcam/image', async (req, res) => {
+  try {
+    const locationResult = getLocationFromRequest(req);
+    if (locationResult.error) {
+      const details = locationResult.error;
+      return res.status(400).json({ error: details.error, details: details.message, supportedLocations: details.supportedLocations });
+    }
+
+    const { locationConfig } = locationResult;
+    const requestedCameraId = sanitizeCameraId(req.query.cam);
+    if (!requestedCameraId) {
+      return res.status(400).json({ error: 'Missing camera id', details: 'Provide ?cam=<camera-id>' });
+    }
+
+    const imageMap = buildWebcamImageMap(locationConfig.webcam);
+    const camera = imageMap.get(requestedCameraId);
+
+    if (!camera) {
+      return res.status(404).json({ error: 'Camera not found', details: 'Camera id is not valid for the selected location' });
+    }
+
+    const cacheKey = `webcam:image:${locationConfig.key}:${camera.id}`;
+    const cachedImage = getCachedValue(cacheKey);
+
+    if (cachedImage) {
+      res.set('Content-Type', cachedImage.contentType);
+      res.set('Cache-Control', `public, max-age=${Math.round(WEBCAM_IMAGE_CACHE_TTL_MS / 1000)}`);
+      return res.send(cachedImage.buffer);
+    }
+
+    const fetch = getFetch();
+    const upstreamResponse = await fetch(camera.url, {
+      headers: {
+        'Cache-Control': 'no-cache'
+      }
+    });
+
+    if (!upstreamResponse.ok) {
+      return res.status(502).json({ error: 'Upstream webcam image returned non-OK status', status: upstreamResponse.status });
+    }
+
+    const contentType = upstreamResponse.headers.get('content-type') || 'image/jpeg';
+    const arrayBuffer = await upstreamResponse.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    setCachedValue(cacheKey, { buffer, contentType }, WEBCAM_IMAGE_CACHE_TTL_MS);
+    res.set('Content-Type', contentType);
+    res.set('Cache-Control', `public, max-age=${Math.round(WEBCAM_IMAGE_CACHE_TTL_MS / 1000)}`);
+    return res.send(buffer);
+  } catch (error) {
+    console.error('Error fetching webcam image:', error);
+    return res.status(500).json({ error: 'Failed to fetch webcam image', details: error.message });
   }
 });
 
@@ -604,7 +757,7 @@ app.get('/api/weatherforecast', async (req, res) => {
     }
     console.log('[weatherforecast] Cache miss; fetching from API');
     
-    const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+    const fetch = getFetch();
     console.log('[weatherforecast] Requesting Open-Meteo API');
     const response = await fetch(url);
 
