@@ -14,6 +14,9 @@ const cacheStore = new Map();
 const WEBCAM_CACHE_TTL_MS = 60 * 1000;
 const WEBCAM_IMAGE_CACHE_TTL_MS = 30 * 1000;
 const WEBCAM_TIME_ZONE = 'Europe/London';
+const LONDON_TIME_ZONE = 'Europe/London';
+const UTC_ISO_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,7})?)?(?:Z|\+00:00|\+0000)?$/i;
+const ISO_TIMESTAMP_HAS_EXPLICIT_ZONE_REGEX = /(?:Z|[+-]\d{2}:?\d{2})$/i;
 const webcamTimestampFormatter = new Intl.DateTimeFormat('en-GB', {
   timeZone: WEBCAM_TIME_ZONE,
   day: '2-digit',
@@ -25,6 +28,20 @@ const webcamTimestampFormatter = new Intl.DateTimeFormat('en-GB', {
 });
 const webcamOffsetFormatter = new Intl.DateTimeFormat('en-GB', {
   timeZone: WEBCAM_TIME_ZONE,
+  timeZoneName: 'shortOffset'
+});
+const londonTimestampFormatter = new Intl.DateTimeFormat('en-GB', {
+  timeZone: LONDON_TIME_ZONE,
+  day: '2-digit',
+  month: '2-digit',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23'
+});
+const londonOffsetFormatter = new Intl.DateTimeFormat('en-GB', {
+  timeZone: LONDON_TIME_ZONE,
   timeZoneName: 'shortOffset'
 });
 
@@ -209,6 +226,85 @@ function getWebcamOffsetMilliseconds(date) {
   const minutes = Number.parseInt(match[3] || '0', 10);
 
   return sign * ((hours * 60) + minutes) * 60 * 1000;
+}
+
+function getFormattedOffset(date, offsetFormatter) {
+  const offsetValue = offsetFormatter
+    .formatToParts(date)
+    .find((part) => part.type === 'timeZoneName')
+    ?.value;
+
+  if (!offsetValue) {
+    return '+00:00';
+  }
+
+  const match = offsetValue.match(/^GMT(?:(\+|-)(\d{1,2})(?::?(\d{2}))?)?$/);
+  if (!match) {
+    return '+00:00';
+  }
+
+  const sign = match[1] === '-' ? '-' : '+';
+  const hours = String(Number.parseInt(match[2] || '0', 10)).padStart(2, '0');
+  const minutes = String(Number.parseInt(match[3] || '0', 10)).padStart(2, '0');
+
+  return `${sign}${hours}:${minutes}`;
+}
+
+function formatDateToLondonIso(date) {
+  const parts = londonTimestampFormatter.formatToParts(date);
+  const values = {};
+
+  for (const part of parts) {
+    if (part.type !== 'literal') {
+      values[part.type] = part.value;
+    }
+  }
+
+  const offset = getFormattedOffset(date, londonOffsetFormatter);
+  return `${values.year}-${values.month}-${values.day}T${values.hour}:${values.minute}:${values.second}${offset}`;
+}
+
+function convertUtcIsoToLondonIso(value) {
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  const trimmed = value.trim();
+  if (!UTC_ISO_TIMESTAMP_REGEX.test(trimmed)) {
+    return value;
+  }
+
+  const normalizedValue = ISO_TIMESTAMP_HAS_EXPLICIT_ZONE_REGEX.test(trimmed)
+    ? trimmed
+    : `${trimmed}Z`;
+
+  const date = new Date(normalizedValue);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return formatDateToLondonIso(date);
+}
+
+function convertUtcTimesInPayload(payload) {
+  if (Array.isArray(payload)) {
+    return payload.map((item) => convertUtcTimesInPayload(item));
+  }
+
+  if (!payload || typeof payload !== 'object') {
+    return convertUtcIsoToLondonIso(payload);
+  }
+
+  const converted = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (typeof value === 'string') {
+      converted[key] = convertUtcIsoToLondonIso(value);
+    } else {
+      converted[key] = convertUtcTimesInPayload(value);
+    }
+  }
+
+  return converted;
 }
 
 function createWebcamDate(year, monthIndex, day, hours, minutes) {
@@ -724,10 +820,11 @@ app.get('/api/tides', async (req, res) => {
     }
 
     const data = await response.json();
-    setCachedValue(cacheKey, data, cacheTtlMs);
+    const localizedData = convertUtcTimesInPayload(data);
+    setCachedValue(cacheKey, localizedData, cacheTtlMs);
     console.log(`[tides] Caching response for station ${station} for ${Math.round(cacheTtlMs / 60000)} minutes`);
     res.set('Cache-Control', 'public, max-age=600');
-    return res.json(data);
+    return res.json(localizedData);
   } catch (err) {
     clearTimeout(timeout);
     if (err.name === 'AbortError') {
