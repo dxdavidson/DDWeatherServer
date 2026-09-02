@@ -74,7 +74,14 @@ const LOCATION_PRESETS = {
     forecast: { latitude: 57.70, longitude: -3.49 },
     marine: { latitude: 57.70, longitude: -3.49 },
     tides: { station: '0250' }, //Burghead
-    livewind: { url: 'http://88.97.23.70:82/' },
+    livewind: {
+      type: 'ecowitt',
+      applicationKeyEnv: 'ECOWITT_APPLICATION_KEY',
+      apiKeyEnv: 'ECOWITT_API_KEY',
+      macEnv: 'ECOWITT_MAC',
+      realTimeUrl: 'https://api.ecowitt.net/api/v3/device/real_time',
+      historyUrl: 'https://api.ecowitt.net/api/v3/device/history'
+    },
     webcam: {
       url: 'http://88.97.23.70/default.html',
       images: [
@@ -87,7 +94,7 @@ const LOCATION_PRESETS = {
     forecast: { latitude: 56.06, longitude: -2.72 },
     marine: { latitude: 56.06, longitude: -2.72 },
     tides: { station: '0223' }, // Station 0223 is Fidra
-    livewind: { url: 'http://88.97.23.70:82/' },
+    livewind: { type: 'scrape', url: 'http://88.97.23.70:82/' },
     webcam: {
       url: 'http://88.97.23.70/default.html',
       images: [
@@ -540,6 +547,157 @@ function determineWindTrend(meanMaxByInterval) {
   return 'Stable';
 }
 
+function getWindFromDirection(degrees) {
+  const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  const index = Math.round((Number(degrees) || 0) / 45) % directions.length;
+  return directions[index];
+}
+
+function getEcowittConfig(locationConfig) {
+  const livewindConfig = locationConfig?.livewind || {};
+  const applicationKey = process.env[livewindConfig.applicationKeyEnv || 'ECOWITT_APPLICATION_KEY'];
+  const apiKey = process.env[livewindConfig.apiKeyEnv || 'ECOWITT_API_KEY'];
+  const mac = process.env[livewindConfig.macEnv || 'ECOWITT_MAC'];
+
+  if (!applicationKey || !apiKey || !mac) {
+    throw new Error('Ecowitt livewind config is missing ECOWITT_APPLICATION_KEY, ECOWITT_API_KEY, or ECOWITT_MAC');
+  }
+
+  return { applicationKey, apiKey, mac };
+}
+
+function formatEcowittDate(date) {
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function calculateMean(values) {
+  if (!Array.isArray(values) || values.length === 0) {
+    return null;
+  }
+
+  const numericValues = values
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value));
+
+  if (numericValues.length === 0) {
+    return null;
+  }
+
+  return numericValues.reduce((sum, value) => sum + value, 0) / numericValues.length;
+}
+
+function determineBurgheadTrend(mean30, mean60) {
+  if (mean30 === null || mean60 === null) {
+    return 'Stable';
+  }
+
+  if (mean30 <= mean60 * 0.85) {
+    return 'Dropping';
+  }
+
+  if (mean30 >= mean60 * 1.15) {
+    return 'Strengthening';
+  }
+
+  return 'Stable';
+}
+
+async function fetchEcowittWindData(locationConfig, { minutes }) {
+  const fetch = getFetch();
+  const ecowittConfig = getEcowittConfig(locationConfig);
+  const endDate = new Date();
+  const startDate = new Date(endDate.getTime() - minutes * 60 * 1000);
+  const historyUrl = new URL(locationConfig.livewind.historyUrl);
+
+  historyUrl.searchParams.set('application_key', ecowittConfig.applicationKey);
+  historyUrl.searchParams.set('api_key', ecowittConfig.apiKey);
+  historyUrl.searchParams.set('mac', ecowittConfig.mac);
+  historyUrl.searchParams.set('start_date', formatEcowittDate(startDate));
+  historyUrl.searchParams.set('end_date', formatEcowittDate(endDate));
+  historyUrl.searchParams.set('cycle_type', 'auto');
+  historyUrl.searchParams.set('call_back', 'wind');
+
+  const response = await fetch(historyUrl.toString(), {
+    headers: { 'Cache-Control': 'no-cache' }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Ecowitt history request failed with status ${response.status}`);
+  }
+
+  const payload = await response.json();
+  if (payload?.code !== 0) {
+    throw new Error(payload?.msg || 'Ecowitt history request failed');
+  }
+
+  return payload?.data?.wind?.wind_speed?.list || {};
+}
+
+async function fetchBurgheadLiveWind(req, res, locationConfig) {
+  const fetch = getFetch();
+  const ecowittConfig = getEcowittConfig(locationConfig);
+  const realTimeUrl = new URL(locationConfig.livewind.realTimeUrl);
+
+  realTimeUrl.searchParams.set('application_key', ecowittConfig.applicationKey);
+  realTimeUrl.searchParams.set('api_key', ecowittConfig.apiKey);
+  realTimeUrl.searchParams.set('mac', ecowittConfig.mac);
+  realTimeUrl.searchParams.set('call_back', 'wind');
+
+  const [realTimeResponse, history30Response, history60Response] = await Promise.all([
+    fetch(realTimeUrl.toString(), { headers: { 'Cache-Control': 'no-cache' } }),
+    fetchEcowittWindData(locationConfig, { minutes: 30 }),
+    fetchEcowittWindData(locationConfig, { minutes: 60 })
+  ]);
+
+  if (!realTimeResponse.ok) {
+    throw new Error(`Ecowitt real-time request failed with status ${realTimeResponse.status}`);
+  }
+
+  const realtimePayload = await realTimeResponse.json();
+  if (realtimePayload?.code !== 0) {
+    throw new Error(realtimePayload?.msg || 'Ecowitt real-time request failed');
+  }
+
+  const realtimeWind = realtimePayload?.data?.wind || {};
+  const currentSpeed = Number.parseFloat(realtimeWind.wind_speed?.value || 'NaN');
+  const currentGust = Number.parseFloat(realtimeWind.wind_gust?.value || 'NaN');
+  const currentDirection = Number.parseFloat(realtimeWind.wind_direction?.value || 'NaN');
+
+  const series30 = Object.values(history30Response || {}).map((value) => Number(value)).filter((value) => Number.isFinite(value));
+  const series60 = Object.values(history60Response || {}).map((value) => Number(value)).filter((value) => Number.isFinite(value));
+
+  const mean30 = calculateMean(series30);
+  const mean60 = calculateMean(series60);
+  const trend = determineBurgheadTrend(mean30, mean60);
+
+  const responseBody = {
+    windSpeed: Number.isFinite(currentSpeed) ? currentSpeed : null,
+    gust: Number.isFinite(currentGust) ? currentGust : null,
+    windDirection: Number.isFinite(currentDirection) ? currentDirection : null,
+    latestTimestamp: realtimeWind.wind_speed?.time ? new Date(Number(realtimeWind.wind_speed.time) * 1000).toISOString() : new Date().toISOString(),
+    windFrom: Number.isFinite(currentDirection) ? getWindFromDirection(currentDirection) : null,
+    trend,
+    meanMaxByInterval: [
+      {
+        intervalMinutes: 30,
+        min: series30.length ? Math.min(...series30) : null,
+        mean: mean30,
+        max: series30.length ? Math.max(...series30) : null
+      },
+      {
+        intervalMinutes: 60,
+        min: series60.length ? Math.min(...series60) : null,
+        mean: mean60,
+        max: series60.length ? Math.max(...series60) : null
+      }
+    ],
+    units: 'mph'
+  };
+
+  return res.json(responseBody);
+}
+
 async function getLaunchOptions() {
   const isLinux = process.platform === 'linux';
 
@@ -582,12 +740,28 @@ async function getLaunchOptions() {
   return options;
 }
 
-// NorthBerwick-only endpoint: intentionally fixed source and ignores query param location.
 app.get('/api/livewind', async (req, res) => {
+  const locationResult = getLocationFromRequest(req);
+  if (locationResult.error) {
+    const details = locationResult.error;
+    return res.status(400).json({ error: details.error, details: details.message, supportedLocations: details.supportedLocations });
+  }
+
+  const { locationConfig } = locationResult;
+  if (locationConfig.livewind.type === 'ecowitt') {
+    try {
+      return await fetchBurgheadLiveWind(req, res, locationConfig);
+    } catch (error) {
+      console.error('Error fetching Burghead wind data:', error);
+      return res.status(500).json({ error: 'Failed to fetch Burghead wind data', details: error.message });
+    }
+  }
+
   let browser;
   try {
-    const livewindConfig = LOCATION_PRESETS.northberwick.livewind;
-    const meanMaxCacheKey = 'livewind:meanMax:northberwick';
+    const livewindConfig = locationConfig.livewind;
+    const locationKey = locationConfig.key;
+    const meanMaxCacheKey = `livewind:meanMax:${locationKey}`;
     const meanMaxCacheTtlMs = 5 * 60 * 1000;
     const cachedMeanMax = getCachedValue(meanMaxCacheKey);
     if (cachedMeanMax) {
@@ -597,13 +771,11 @@ app.get('/api/livewind', async (req, res) => {
     }
 
     const launchOptions = await getLaunchOptions();
-    //console.log('Launching Puppeteer with options', { headless: launchOptions.headless, hasExecutable: !!launchOptions.executablePath, executablePath: typeof launchOptions.executablePath === 'string' ? launchOptions.executablePath : undefined });
     browser = await puppeteer.launch(launchOptions);
 
     const page = await browser.newPage();
     await page.goto(livewindConfig.url, { waitUntil: 'networkidle0', timeout: 30000 });
 
-    // Wait until the table cells update from '---' to actual values (timeout after 10 seconds)
     await page.waitForFunction(() => {
       const latestVariable2 = document.querySelector('#latestVariable2');
       const latestVariable1 = document.querySelector('#latestVariable1');
@@ -663,23 +835,17 @@ app.get('/api/livewind', async (req, res) => {
       console.log(`[livewind] Mean/max cached for ${Math.round(meanMaxCacheTtlMs / 60000)} minutes`);
     }
 
-    // Calculate windFrom based on windDirection
     const directionDegrees = parseInt(windDirection, 10);
-    const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
-    const index = Math.round(directionDegrees / 45) % 8;
-    const windFrom = directions[index];
-  
-
+    const windFrom = getWindFromDirection(directionDegrees);
     const trend = determineWindTrend(meanMaxByInterval);
 
-    res.json({ windSpeed, windDirection, latestTimestamp, windFrom, trend, meanMaxByInterval, units: 'mph' });
+    return res.json({ windSpeed, windDirection, latestTimestamp, windFrom, trend, meanMaxByInterval, units: 'mph' });
   } catch (error) {
-    //console.error('Error fetching or parsing wind data with Puppeteer:', error, { env: process.env.NODE_ENV, hasChromium: !!chromium });
     console.error('Error fetching or parsing wind data with Puppeteer:', error, { env: process.env.NODE_ENV });
     if (error && error.message && error.message.includes('Failed to launch the browser')) {
       return res.status(500).json({ error: 'Browser failed to launch', details: error.message });
     }
-    res.status(500).json({ error: 'Failed to fetch wind data', details: error.message });
+    return res.status(500).json({ error: 'Failed to fetch wind data', details: error.message });
   } finally {
     if (browser) {
       try {
