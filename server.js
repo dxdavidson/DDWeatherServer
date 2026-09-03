@@ -579,7 +579,23 @@ function getEcowittConfig(locationConfig) {
 
 function formatEcowittDate(date) {
   const pad = (value) => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/London',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(date).reduce((values, part) => {
+    if (part.type !== 'literal') {
+      values[part.type] = part.value;
+    }
+    return values;
+  }, {});
+
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
 }
 
 function calculateMean(values) {
