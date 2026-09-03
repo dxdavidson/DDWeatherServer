@@ -32,6 +32,10 @@ Express proxy server for weather, wave, tide, and live wind data.
 - Node.js 18+ (includes npm)
 - Internet access to external APIs/services
 - Admiralty API subscription key for tides (`ADMIRALTY_API_KEY`)
+- Ecowitt API credentials for live wind data:
+   - `ECOWITT_APPLICATION_KEY`
+   - `ECOWITT_API_KEY`
+   - `ECOWITT_MAC`
 
 ## New install setup
 
@@ -44,6 +48,20 @@ Express proxy server for weather, wave, tide, and live wind data.
    - PowerShell: `Copy-Item .env.example .env`
 4. Edit `.env` and set your real key:
    - `ADMIRALTY_API_KEY=your_real_admiralty_key`
+   - `ECOWITT_APPLICATION_KEY=your_ecowitt_application_key`
+   - `ECOWITT_API_KEY=your_ecowitt_api_key`
+   - `ECOWITT_MAC=your_weather_station_mac`
+
+## Railway deployment
+
+When deploying to Railway, add the following variables in the service's **Variables** settings:
+
+- `ADMIRALTY_API_KEY`
+- `ECOWITT_APPLICATION_KEY`
+- `ECOWITT_API_KEY`
+- `ECOWITT_MAC`
+
+Enter the real values as Railway variable values. Do not commit those values to the repository; `.env` is intended for local development and is gitignored.
 
 ## Run the server
 
