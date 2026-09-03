@@ -44,6 +44,17 @@ const londonOffsetFormatter = new Intl.DateTimeFormat('en-GB', {
   timeZone: LONDON_TIME_ZONE,
   timeZoneName: 'shortOffset'
 });
+const londonTimeOfDayFormatter = new Intl.DateTimeFormat('en-GB', {
+  timeZone: LONDON_TIME_ZONE,
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23'
+});
+
+function formatTimeOfDayLondon(date) {
+  return londonTimeOfDayFormatter.format(date);
+}
 
 function getCachedValue(key) {
   const entry = cacheStore.get(key);
@@ -603,7 +614,7 @@ function determineBurgheadTrend(mean30, mean60) {
   return 'Stable';
 }
 
-async function fetchEcowittWindData(locationConfig, { minutes }) {
+async function fetchEcowittHistoryList(locationConfig, { minutes }) {
   const fetch = getFetch();
   const ecowittConfig = getEcowittConfig(locationConfig);
   const endDate = new Date();
@@ -634,6 +645,19 @@ async function fetchEcowittWindData(locationConfig, { minutes }) {
   return payload?.data?.wind?.wind_speed?.list || {};
 }
 
+// Ecowitt's list is keyed by unix-seconds timestamp; slice it down to the trailing window.
+function filterHistoryListByMinutes(list, minutes) {
+  const cutoffSeconds = Math.floor((Date.now() - minutes * 60 * 1000) / 1000);
+  return Object.entries(list)
+    .filter(([timestamp]) => Number(timestamp) >= cutoffSeconds)
+    .map(([, value]) => Number(value))
+    .filter((value) => Number.isFinite(value));
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function fetchBurgheadLiveWind(req, res, locationConfig) {
   const fetch = getFetch();
   const ecowittConfig = getEcowittConfig(locationConfig);
@@ -644,28 +668,26 @@ async function fetchBurgheadLiveWind(req, res, locationConfig) {
   realTimeUrl.searchParams.set('mac', ecowittConfig.mac);
   realTimeUrl.searchParams.set('call_back', 'wind');
 
-  const [realTimeResponse, history30Response, history60Response] = await Promise.all([
-    fetch(realTimeUrl.toString(), { headers: { 'Cache-Control': 'no-cache' } }),
-    fetchEcowittWindData(locationConfig, { minutes: 30 }),
-    fetchEcowittWindData(locationConfig, { minutes: 60 })
-  ]);
-
+  // Ecowitt rejects concurrent requests per key with "Operation too frequent", so fetch sequentially.
+  const realTimeResponse = await fetch(realTimeUrl.toString(), { headers: { 'Cache-Control': 'no-cache' } });
   if (!realTimeResponse.ok) {
     throw new Error(`Ecowitt real-time request failed with status ${realTimeResponse.status}`);
   }
-
   const realtimePayload = await realTimeResponse.json();
   if (realtimePayload?.code !== 0) {
     throw new Error(realtimePayload?.msg || 'Ecowitt real-time request failed');
   }
+
+  await wait(1100);
+  const history60List = await fetchEcowittHistoryList(locationConfig, { minutes: 60 });
 
   const realtimeWind = realtimePayload?.data?.wind || {};
   const currentSpeed = Number.parseFloat(realtimeWind.wind_speed?.value || 'NaN');
   const currentGust = Number.parseFloat(realtimeWind.wind_gust?.value || 'NaN');
   const currentDirection = Number.parseFloat(realtimeWind.wind_direction?.value || 'NaN');
 
-  const series30 = Object.values(history30Response || {}).map((value) => Number(value)).filter((value) => Number.isFinite(value));
-  const series60 = Object.values(history60Response || {}).map((value) => Number(value)).filter((value) => Number.isFinite(value));
+  const series30 = filterHistoryListByMinutes(history60List, 30);
+  const series60 = filterHistoryListByMinutes(history60List, 60);
 
   const mean30 = calculateMean(series30);
   const mean60 = calculateMean(series60);
@@ -675,7 +697,7 @@ async function fetchBurgheadLiveWind(req, res, locationConfig) {
     windSpeed: Number.isFinite(currentSpeed) ? currentSpeed : null,
     gust: Number.isFinite(currentGust) ? currentGust : null,
     windDirection: Number.isFinite(currentDirection) ? currentDirection : null,
-    latestTimestamp: realtimeWind.wind_speed?.time ? new Date(Number(realtimeWind.wind_speed.time) * 1000).toISOString() : new Date().toISOString(),
+    latestTimestamp: realtimeWind.wind_speed?.time ? formatTimeOfDayLondon(new Date(Number(realtimeWind.wind_speed.time) * 1000)) : formatTimeOfDayLondon(new Date()),
     windFrom: Number.isFinite(currentDirection) ? getWindFromDirection(currentDirection) : null,
     trend,
     meanMaxByInterval: [
