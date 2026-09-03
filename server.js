@@ -680,6 +680,13 @@ async function fetchBurgheadLiveWind(req, res, locationConfig) {
 
   await wait(1100);
   const history60List = await fetchEcowittHistoryList(locationConfig, { minutes: 60 });
+  const historyTimestamps = Object.keys(history60List);
+  console.log('[livewind] History diagnostics', {
+    recordCount: historyTimestamps.length,
+    firstTimestamp: historyTimestamps[0] || null,
+    lastTimestamp: historyTimestamps.at(-1) || null,
+    serverNowSeconds: Math.floor(Date.now() / 1000)
+  });
 
   const realtimeWind = realtimePayload?.data?.wind || {};
   const currentSpeed = Number.parseFloat(realtimeWind.wind_speed?.value || 'NaN');
