@@ -708,6 +708,7 @@ async function fetchBurgheadLiveWind(req, res, locationConfig) {
   const currentSpeed = Number.parseFloat(realtimeWind.wind_speed?.value || 'NaN');
   const currentGust = Number.parseFloat(realtimeWind.wind_gust?.value || 'NaN');
   const currentDirection = Number.parseFloat(realtimeWind.wind_direction?.value || 'NaN');
+  const windDirection10MinuteAverage = parseNumericValue(realtimeWind['10_minute_average_wind_direction']?.value);
 
   const series30 = filterHistoryListByMinutes(history60List, 30);
   const series60 = filterHistoryListByMinutes(history60List, 60);
@@ -720,6 +721,7 @@ async function fetchBurgheadLiveWind(req, res, locationConfig) {
     windSpeed: Number.isFinite(currentSpeed) ? currentSpeed : null,
     gust: Number.isFinite(currentGust) ? currentGust : null,
     windDirection: Number.isFinite(currentDirection) ? currentDirection : null,
+    windDirection10MinuteAverage,
     latestTimestamp: realtimeWind.wind_speed?.time ? formatTimeOfDayLondon(new Date(Number(realtimeWind.wind_speed.time) * 1000)) : formatTimeOfDayLondon(new Date()),
     windFrom: Number.isFinite(currentDirection) ? getWindFromDirection(currentDirection) : null,
     trend,

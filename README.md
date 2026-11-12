@@ -15,9 +15,8 @@ Express proxy server for weather, wave, tide, and live wind data.
    - Data returned: tidal events for the selected station
    - Auth: requires `ADMIRALTY_API_KEY`
 - `/api/livewind`
-   - Source: live wind station webpage configured in `LOCATION_PRESETS.northberwick.livewind.url`
-   - Retrieval method: page scrape via Puppeteer (not a JSON API)
-   - Data returned: latest wind speed/direction/time, a `trend` value (`Strengthening`, `Dropping`, or `Steady`) based on 5% changes between the 60/30/5-minute mean values, and min/mean/max values for 5/30/60-minute intervals
+   - North Berwick: scrapes the configured live wind station webpage using Puppeteer, returning current wind and 5/30/60-minute statistics.
+   - Burghead: uses the Ecowitt real-time and history APIs. The response includes `windDirection10MinuteAverage`, the 10-minute average wind direction in degrees, or `null` if unavailable.
 - `/api/webcam`
    - Source: webcam page configured in `LOCATION_PRESETS.<location>.webcam.url`
    - Retrieval method: page scrape via `node-fetch` and `jsdom`
